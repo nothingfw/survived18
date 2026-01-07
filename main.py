@@ -2,99 +2,122 @@ import torch
 import numpy as np
 import csv
 
-file = open('train.csv', 'r')
-text = file.read()
+# ======================
+# reproducibility
+# ======================
+torch.manual_seed(42)
+np.random.seed(42)
 
-text = (text.replace('south', '0').replace('north', '1').replace('east', '2').replace('west', '3')
-        .replace('new', '2').replace('old', '1').replace('normal', '0')
-        .replace('electric_heater', '1').replace('central', '0')
-        .replace('spruce', '0').replace('fir', '1').replace('pine', '2')
-        .replace('dense', '0').replace('normal', '1').replace('sparse', '2')
-        .replace('simple_stand', '0').replace('bucket', '1').replace('water_reservoir', '2').replace('unknown', '3')
-        .replace('low', '0').replace('medium', '1').replace('high', '2'))
+# ======================
+# categorical mappings
+# ======================
+MAP_WING = {"south": 0, "north": 1, "east": 2, "west": 3}
+MAP_WINDOW = {"old": 0, "normal": 1, "new": 2}
+MAP_HEATING = {"central": 0, "electric_heater": 1}
+MAP_TREE = {"spruce": 0, "fir": 1, "pine": 2}
+MAP_FORM = {"dense": 0, "normal": 1, "sparse": 2}
+MAP_STAND = {"simple_stand": 0, "bucket": 1, "water_reservoir": 2, "unknown": 3}
+MAP_TINSEL = {"low": 0, "medium": 1, "high": 2}
 
-dataset = open("newTrain.csv", 'w')
-dataset.write(text)
-file.close()
+# ======================
+# helper: encode row
+# ======================
+def encode_row(row):
+    row = row.copy()
+    row[2]  = MAP_WING.get(row[2], np.nan)
+    row[7]  = MAP_WINDOW.get(row[7], np.nan)
+    row[8]  = MAP_HEATING.get(row[8], np.nan)
+    row[17] = MAP_TREE.get(row[17], np.nan)
+    row[19] = MAP_FORM.get(row[19], np.nan)
+    row[20] = MAP_STAND.get(row[20], np.nan)
+    row[25] = MAP_TINSEL.get(row[25], np.nan)
+    return row
 
-file = open('test.csv', 'r')
-text = file.read()
+# ======================
+# read & encode train
+# ======================
+X_rows = []
+y_rows = []
 
-text = (text.replace('south', '0').replace('north', '1').replace('east', '2').replace('west', '3')
-        .replace('new', '2').replace('old', '1').replace('normal', '0')
-        .replace('electric_heater', '1').replace('central', '0')
-        .replace('spruce', '0').replace('fir', '1').replace('pine', '2')
-        .replace('dense', '0').replace('normal', '1').replace('sparse', '2')
-        .replace('simple_stand', '0').replace('bucket', '1').replace('water_reservoir', '2').replace('unknown', '3')
-        .replace('low', '0').replace('medium', '1').replace('high', '2'))
+with open("train.csv", newline="", encoding="utf-8") as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    for row in reader:
+        row = encode_row(row)
+        X_rows.append([float(x) if x != "" else np.nan for x in row[1:-1]])
+        y_rows.append(float(row[-1]))
 
-idFir = ""
-textId = text.replace('\n', ',').split(',')
-for a in range(len(textId)-1):
-        if a%29 == 0:
-                idFir += textId[a] + "\n"
+X = torch.tensor(X_rows, dtype=torch.float32)
+y = torch.tensor(y_rows, dtype=torch.float32).unsqueeze(1)
 
+# ======================
+# shuffle + split
+# ======================
+idx = torch.randperm(X.shape[0])
+X = X[idx]
+y = y[idx]
 
-dataset = open("newTest.csv", 'w')
-dataset.write(text)
-file.close()
+X_train_raw, X_val_raw = X[:20000], X[20000:]
+y_train, y_val = y[:20000], y[20000:]
 
-dataset = open("apartment_id.csv", 'w')
-dataset.write(idFir)
-file.close()
+# ======================
+# NaN handling (train mean)
+# ======================
+nan_mask = torch.isnan(X_train_raw)
+col_mean = torch.where(nan_mask, 0.0, X_train_raw).sum(0) / (~nan_mask).sum(0).clamp(min=1)
 
-data = np.genfromtxt('newTrain.csv', delimiter=',', skip_header=1)
-data = torch.tensor(data, dtype=torch.float32)
-data = data[:, 1:]
-index = torch.randperm(data.shape[0])
-data = data[index]
+X_train = torch.where(nan_mask, col_mean, X_train_raw)
+X_val = torch.where(torch.isnan(X_val_raw), col_mean, X_val_raw)
 
-X, y = data[:, :-1], data[:, -1:]
-X_train_raw, X_val_raw = X[:20_000], X[20_000:]
-y_train, y_val = y[:20_000], y[20_000:]
-
-train_nan = torch.isnan(X_train_raw)
-val_nan = torch.isnan(X_val_raw)
-
-col_sum = torch.where(train_nan, torch.zeros_like(X_train_raw), X_train_raw).sum(0)
-col_cnt = (~train_nan).sum(0).clamp(min=1)
-col_mean = col_sum / col_cnt
-
-X_train = torch.where(train_nan, col_mean, X_train_raw)
-X_val   = torch.where(val_nan,   col_mean, X_val_raw)
-
+# ======================
+# normalization (train stats)
+# ======================
 mean = X_train.mean(0)
 std = X_train.std(0)
 std = torch.where(std < 1e-6, torch.ones_like(std), std)
 
 X_train = (X_train - mean) / std
-X_val   = (X_val - mean) / std
+X_val = (X_val - mean) / std
 
+X_train = torch.nan_to_num(X_train)
+X_val = torch.nan_to_num(X_val)
+
+# ======================
+# save train artifacts
+# ======================
 torch.save(X_train, "X_train.pt")
 torch.save(y_train, "y_train.pt")
 torch.save(X_val, "X_val.pt")
 torch.save(y_val, "y_val.pt")
+torch.save(mean, "train_mean.pt")
+torch.save(std, "train_std.pt")
 
-data2 = np.genfromtxt('newTest.csv', delimiter=',', skip_header=1)
-data2 = torch.tensor(data2, dtype=torch.float32)
-data2 = data2[:, 1:]
+# ======================
+# read & encode test
+# ======================
+X_test_rows = []
+apartment_ids = []
 
-train_nan = torch.isnan(data2)
+with open("test.csv", newline="", encoding="utf-8") as f:
+    reader = csv.reader(f)
+    header = next(reader)
+    for row in reader:
+        apartment_ids.append(row[0])
+        row = encode_row(row)
+        X_test_rows.append([float(x) if x != "" else np.nan for x in row[1:]])
 
-col_sum = torch.where(train_nan, torch.zeros_like(data2), data2).sum(0)
-col_cnt = (~train_nan).sum(0).clamp(min=1)
-col_mean = col_sum / col_cnt
+X_test = torch.tensor(X_test_rows, dtype=torch.float32)
 
-data2 = torch.where(train_nan, col_mean, data2)
+# ======================
+# apply train preprocessing to test
+# ======================
+nan_mask = torch.isnan(X_test)
+X_test = torch.where(nan_mask, col_mean, X_test)
+X_test = (X_test - mean) / std
+X_test = torch.nan_to_num(X_test)
 
-mean = data2.mean(0)
-std = data2.std(0)
-std = torch.where(std < 1e-6, torch.ones_like(std), std)
-
-data2 = (data2 - mean) / std
-
-torch.save(data2, "newTest.pt")
-
-with open('submission.csv', mode='w', newline='') as csv_file:
-    writer = csv.writer(csv_file)
-    writer.writerow(['apartment_id', 'survived_to_18jan'])
+# ======================
+# save test artifacts
+# ======================
+torch.save(X_test, "newTest.pt")
+torch.save(apartment_ids, "apartment_id.pt")
