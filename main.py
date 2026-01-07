@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import csv
 
 file = open('train.csv', 'r')
 text = file.read()
@@ -11,8 +12,35 @@ text = (text.replace('south', '0').replace('north', '1').replace('east', '2').re
         .replace('dense', '0').replace('normal', '1').replace('sparse', '2')
         .replace('simple_stand', '0').replace('bucket', '1').replace('water_reservoir', '2').replace('unknown', '3')
         .replace('low', '0').replace('medium', '1').replace('high', '2'))
+
 dataset = open("newTrain.csv", 'w')
 dataset.write(text)
+file.close()
+
+file = open('test.csv', 'r')
+text = file.read()
+
+text = (text.replace('south', '0').replace('north', '1').replace('east', '2').replace('west', '3')
+        .replace('new', '2').replace('old', '1').replace('normal', '0')
+        .replace('electric_heater', '1').replace('central', '0')
+        .replace('spruce', '0').replace('fir', '1').replace('pine', '2')
+        .replace('dense', '0').replace('normal', '1').replace('sparse', '2')
+        .replace('simple_stand', '0').replace('bucket', '1').replace('water_reservoir', '2').replace('unknown', '3')
+        .replace('low', '0').replace('medium', '1').replace('high', '2'))
+
+idFir = ""
+textId = text.replace('\n', ',').split(',')
+for a in range(len(textId)-1):
+        if a%29 == 0:
+                idFir += textId[a] + "\n"
+
+
+dataset = open("newTest.csv", 'w')
+dataset.write(text)
+file.close()
+
+dataset = open("apartment_id.csv", 'w')
+dataset.write(idFir)
 file.close()
 
 data = np.genfromtxt('newTrain.csv', delimiter=',', skip_header=1)
@@ -46,3 +74,27 @@ torch.save(X_train, "X_train.pt")
 torch.save(y_train, "y_train.pt")
 torch.save(X_val, "X_val.pt")
 torch.save(y_val, "y_val.pt")
+
+data2 = np.genfromtxt('newTest.csv', delimiter=',', skip_header=1)
+data2 = torch.tensor(data2, dtype=torch.float32)
+data2 = data2[:, 1:]
+
+train_nan = torch.isnan(data2)
+
+col_sum = torch.where(train_nan, torch.zeros_like(data2), data2).sum(0)
+col_cnt = (~train_nan).sum(0).clamp(min=1)
+col_mean = col_sum / col_cnt
+
+data2 = torch.where(train_nan, col_mean, data2)
+
+mean = data2.mean(0)
+std = data2.std(0)
+std = torch.where(std < 1e-6, torch.ones_like(std), std)
+
+data2 = (data2 - mean) / std
+
+torch.save(data2, "newTest.pt")
+
+with open('submission.csv', mode='w', newline='') as csv_file:
+    writer = csv.writer(csv_file)
+    writer.writerow(['apartment_id', 'survived_to_18jan'])
